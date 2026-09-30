@@ -1,0 +1,64 @@
+name: collect
+
+# 평일 출퇴근 시간대에 9404 차량 위치를 받아 data/에 올린다.
+# 예약 실행은 늦게 시작할 수 있어 구간보다 30분 이상 앞서 띄우고, collect.ts가 구간 시작까지 기다린다.
+# cron은 UTC다. 06:25 KST(월~금) = 21:25 UTC(일~목), 18:07 KST(월~금) = 09:07 UTC(월~금).
+on:
+  schedule:
+    - cron: '25 21 * * 0-4'
+    - cron: '7 9 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: 'am 07:00~09:00, pm 18:30~21:00'
+        type: choice
+        options: [am, pm]
+        default: am
+      minutes:
+        description: '구간 대신 지금부터 N분 (비우면 구간대로)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      TZ: Asia/Seoul
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: 수집
+        env:
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          SLOT: ${{ inputs.slot }}
+          MINUTES: ${{ inputs.minutes }}
+        run: |
+          if [ -z "$SLOT" ]; then
+            if [ "$(date +%H)" -lt 12 ]; then SLOT=am; else SLOT=pm; fi
+          fi
+          if [ -n "$MINUTES" ]; then
+            node collect.ts "$SLOT" --minutes "$MINUTES"
+          else
+            node collect.ts "$SLOT"
+          fi
+
+      - name: 올리기
+        if: always()
+        run: |
+          shopt -s nullglob
+          files=(data/*/*.jsonl)
+          [ ${#files[@]} -eq 0 ] && { echo '올릴 파일 없음'; exit 0; }
+          gzip -f "${files[@]}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data
+          git commit -m "수집 $(date +%F) $(basename "${files[0]}" .jsonl)"
+          for i in 1 2 3; do git pull --rebase && git push && exit 0; sleep 5; done
+          exit 1
