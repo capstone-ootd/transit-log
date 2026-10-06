@@ -28,8 +28,28 @@
 
 ## 돌리는 법
 
-`.github/workflows/collect.yml`이 06:25와 18:07(KST)에 시작해 구간이 열릴 때까지 기다린다. 끝나면 파일을 gzip으로 묶어 커밋한다.
-수동 실행은 Actions → collect → Run workflow. `minutes`를 넣으면 구간과 상관없이 그 시간만큼 받는다.
+`.github/workflows/collect.yml`은 수동 실행(workflow_dispatch)으로만 돈다. 시작하면 구간이 열릴 때까지 기다리고, 끝나면 파일을 gzip으로 묶어 커밋한다.
+GitHub 예약 실행(schedule)은 쓰지 않는다. 2026-09-30~10-06에 2.5~9시간 늦게 시작해 구간을 모두 놓쳤다.
+
+시작은 [cron-job.org](https://cron-job.org)가 맡는다. 작업 두 개를 만든다.
+
+| 작업 | 시각 (Asia/Seoul) | 본문 |
+|---|---|---|
+| 9404 am | 월~금 06:50 | `{"ref":"main","inputs":{"slot":"am"}}` |
+| 9404 pm | 월~금 18:20 | `{"ref":"main","inputs":{"slot":"pm"}}` |
+
+두 작업 모두 `POST https://api.github.com/repos/capstone-ootd/transit-log/actions/workflows/collect.yml/dispatches`, 헤더는
+
+```
+Authorization: Bearer <토큰>
+Accept: application/vnd.github+json
+X-GitHub-Api-Version: 2022-11-28
+Content-Type: application/json
+```
+
+성공 응답은 `204 No Content`다. 토큰은 GitHub → Settings → Developer settings → Fine-grained tokens에서 이 저장소 하나만 고르고 권한은 **Actions: Read and write** 하나만 준다. cron-job.org에서 실패 알림 메일을 켜 둔다.
+
+손으로 돌릴 때는 Actions → collect → Run workflow, 또는 `gh workflow run collect.yml -R capstone-ootd/transit-log -f slot=pm`. `minutes`를 넣으면 구간과 상관없이 그 시간만큼 받는다.
 
 로컬에서는 Node 24 이상으로:
 
