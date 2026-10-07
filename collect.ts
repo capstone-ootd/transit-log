@@ -8,9 +8,12 @@
 // 하루 호출은 서울 위치·경기 위치 각 810건, 서울 도착 270건, 정류장 목록 2건으로 개발계정 한도(서비스별 일 1,000건) 안이다.
 // 결과는 data/<노선ID>/<날짜>-<am|pm>.jsonl에 한 줄씩 붙인다. 줄마다 kind: stations | seoulPos | gbisPos | seoulArr | error.
 //
-// SEOUL_SUBWAY_KEY(서울 열린데이터광장 실시간 지하철 인증키)가 있으면 신분당선·경강선 열차 위치도 받는다. 노선마다 40초 간격,
-// 하루 405건 × 2노선 = 810건으로 실시간 지하철 키 한도(일 1,000건) 안이다. 시험 실행(--minutes)도 같은 한도를 쓴다.
-// 결과는 data/subway/<날짜>-<am|pm>.jsonl, kind: subwayPos(line, items) | error.
+// SEOUL_SUBWAY_KEY(서울 열린데이터광장 실시간 지하철 인증키)가 있으면 지하철도 받는다. 실시간 지하철 키 한도는 일 1,000건이다.
+// - 2분마다 수도권 전 역 도착 정보(ALL, 약 2,900행이라 1,000행씩 3번). 역이 촘촘해 19개 노선의 모든 열차가 어느 역엔가 잡힌다.
+//   코레일 노선(경강선 등)은 recptnDt가 열차별 상태 변경 시각이라 2분 간격이어도 시각이 정확하다. 하루 135회 × 3 = 405건(4쪽이면 540건).
+// - 60초마다 신분당선 열차 위치. 신분당선은 recptnDt가 모든 열차에 같은 갱신 시각이라 조회 간격이 곧 정밀도다. 하루 270건.
+// 합 675건(최대 810건). 시험 실행(--minutes)도 같은 한도를 쓴다.
+// 결과는 data/subway/<날짜>-<am|pm>.jsonl, kind: subwayArr(total, items) | subwayPos(line, items) | error.
 
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 
@@ -19,8 +22,12 @@ const SEOUL = 'http://ws.bus.go.kr/api/rest';
 const GBIS_POS = 'https://apis.data.go.kr/6410000/buslocationservice/v2/getBusLocationListv2';
 const TICK_MS = 10_000;
 const SUBWAY = 'http://swopenapi.seoul.go.kr/api/subway';
-const SUBWAY_LINES = ['신분당선', '경강선']; // 재형 10.06 경로. 시간표 그대로 쓰는 지하철 구간이 실제로 얼마나 흔들리는지 본다
-const SUBWAY_EVERY = 4; // 틱 4번(40초)마다 노선마다 한 번
+const SUBWAY_POS_LINES = ['신분당선']; // 재형 10.06 경로 중 도착 정보 시각이 거친 노선. 경강선은 ALL로 충분하다
+const SUBWAY_POS_EVERY = 6; // 틱 6번(60초)마다
+const SUBWAY_ARR_EVERY = 12; // 틱 12번(2분)마다
+const SUBWAY_ARR_PAGE = 1000; // 한 번에 받을 수 있는 최대 행
+const SUBWAY_ARR_MAX_PAGES = 4; // 출퇴근에 행이 늘어도 한도를 넘지 않게 막는다
+const SUBWAY_ARR_FIELDS = ['subwayId', 'updnLine', 'statnId', 'btrainNo', 'bstatnId', 'btrainSttus', 'arvlCd', 'barvlDt', 'recptnDt', 'lstcarAt', 'ordkey'];
 const SUBWAY_FIELDS = ['subwayId', 'statnId', 'statnNm', 'statnTid', 'statnTnm', 'trainNo', 'updnLine', 'trainSttus', 'directAt', 'lstcarAt', 'recptnDt', 'lastRecptnDt'];
 const WINDOWS: Record<string, [number, number]> = { am: [7 * 60, 9 * 60], pm: [18 * 60 + 30, 21 * 60] };
 
@@ -67,6 +74,22 @@ async function subwayPos(key: string, line: string): Promise<Item[]> {
   if (err.code === 'INFO-200') return []; // 해당 데이터 없음(운행 열차 없음)
   if (err.code !== 'INFO-000') throw new Error(`subway ${line}: ${err.code} ${err.message}`);
   return (body.realtimePositionList ?? []).map((i: Item) => pick(i, SUBWAY_FIELDS));
+}
+
+// 전 역 도착 정보. 역마다 방향별로 다가오는 열차 1~2대, arvlCd 0 진입 · 1 도착 · 2 출발 · 3 전역출발 · 4 전역진입 · 5 전역도착 · 99 운행중.
+// 쪽마다 따로 받는 것이라 쪽 사이 몇 초 차이가 있다
+async function subwayArrivals(key: string): Promise<{ total: number; items: Item[] }> {
+  const items: Item[] = [];
+  let total = Infinity;
+  for (let p = 0; p < SUBWAY_ARR_MAX_PAGES && p * SUBWAY_ARR_PAGE < total; p++) {
+    const body = await fetchJson(`${SUBWAY}/${encodeURIComponent(key)}/json/realtimeStationArrival/${p * SUBWAY_ARR_PAGE + 1}/${(p + 1) * SUBWAY_ARR_PAGE}/ALL`);
+    const err = body.errorMessage ?? body;
+    if (err.code === 'INFO-200') return { total: 0, items: [] };
+    if (err.code !== 'INFO-000') throw new Error(`subway ALL ${p + 1}쪽: ${err.code} ${err.message}`);
+    total = err.total;
+    for (const i of body.realtimeArrivalList ?? []) items.push(pick(i, SUBWAY_ARR_FIELDS));
+  }
+  return { total, items };
 }
 
 function pick(item: Item, fields: string[]): Item {
@@ -128,8 +151,9 @@ async function main() {
     if (k % 2 === 0) await attempt('seoulPos', async () => ({ items: await seoul('buspos/getBusPosByRtid', key) }));
     else await attempt('gbisPos', () => gbisPos(key));
     if (k % 6 === 0) await attempt('seoulArr', async () => ({ items: (await seoul('arrive/getArrInfoByRouteAll', key)).map(i => pick(i, ARR_FIELDS)) }));
-    if (subwayKey && k % SUBWAY_EVERY === 1) {
-      for (const line of SUBWAY_LINES) await attempt('subwayPos', async () => ({ line, items: await subwayPos(subwayKey, line) }), subwayFile);
+    if (subwayKey && k % SUBWAY_ARR_EVERY === 1) await attempt('subwayArr', () => subwayArrivals(subwayKey), subwayFile);
+    if (subwayKey && k % SUBWAY_POS_EVERY === 3) {
+      for (const line of SUBWAY_POS_LINES) await attempt('subwayPos', async () => ({ line, items: await subwayPos(subwayKey, line) }), subwayFile);
     }
     await sleep(Math.max(0, tick + TICK_MS - Date.now()));
   }
