@@ -11,12 +11,17 @@
 | 같은 구간, 서울 위치와 10초 엇갈려 | 20초 | 경기 버스위치 v2 `getBusLocationListv2` — 차량별 정류장 순번과 도착·출발 상태 |
 | 같은 구간 | 60초 | 서울 버스도착 `arrive/getArrInfoByRouteAll` — 정류장별 도착 예측, 만차·혼잡 |
 | 실행마다 한 번 | — | 서울 노선정보 `busRouteInfo/getStaionByRoute` — 정류장 목록 |
+| 같은 구간 (Secrets `SEOUL_SUBWAY_KEY`가 있을 때) | 40초 | 서울 실시간 지하철 위치 `realtimePosition` — 신분당선·경강선 열차별 역, 진입·도착·출발 상태와 그 시각 |
 
 노선 ID는 `100100391`이다. 서울 버스, 경기 GBIS, ODsay에서 같은 값이다.
+
+지하철은 경로 엔진이 시간표 그대로 쓰는 구간이 실제로 얼마나 흔들리는지 보려고 10.07에 더했다. 실시간 지하철 키 한도가 일 1,000건이라 노선마다 40초(하루 810건)로 받는다.
 
 ## 파일
 
 `data/100100391/<날짜>-<am|pm>.jsonl.gz`. 한 줄이 한 번의 응답이다.
+
+지하철은 `data/subway/<날짜>-<am|pm>.jsonl.gz`이고 줄마다 `{"t", "kind": "subwayPos", "line": "신분당선", "items": [...]}`다. `trainSttus`는 0 진입 · 1 도착 · 2 출발 · 3 전역출발, `recptnDt`는 그 상태를 받은 시각(KST)이다.
 
 ```json
 {"t":"2026-10-01T22:00:07.066Z","kind":"seoulPos","items":[{"vehId":"113008219","plainNo":"서울74사3676","sectOrd":"6","sectDist":"0","fullSectDist":"0.358","stopFlag":"1","dataTm":"20261002070000", "...": "..."}]}
@@ -57,7 +62,7 @@ Content-Type: application/json
 DATA_GO_KR_KEY=... node collect.ts am --minutes 5
 ```
 
-키는 공공데이터포털 일반 인증키이고, 저장소의 Secrets `DATA_GO_KR_KEY`에 둔다.
+키는 공공데이터포털 일반 인증키이고, 저장소의 Secrets `DATA_GO_KR_KEY`에 둔다. 지하철 키는 서울 열린데이터광장 → 인증키 신청 → **실시간 지하철** 인증키(일반 인증키와 다르다, 신청 즉시 발급)를 Secrets `SEOUL_SUBWAY_KEY`에 둔다. 없으면 지하철만 건너뛴다. 로컬 시험은 `SEOUL_SUBWAY_KEY=sample`로 한 번에 5편성까지 받을 수 있다.
 
 ## 출처
 

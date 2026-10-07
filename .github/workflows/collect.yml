@@ -41,6 +41,7 @@ jobs:
       - name: 수집
         env:
           DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          SEOUL_SUBWAY_KEY: ${{ secrets.SEOUL_SUBWAY_KEY }}
           SLOT: ${{ inputs.slot }}
           MINUTES: ${{ inputs.minutes }}
         run: |
